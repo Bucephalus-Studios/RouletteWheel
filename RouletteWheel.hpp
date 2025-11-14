@@ -1,280 +1,351 @@
-#include "classes/WheelRegion.hpp"
+#ifndef ROULETTE_WHEEL_HPP
+#define ROULETTE_WHEEL_HPP
 
+#include "classes/WheelRegion.hpp"
+#include <vector>
+#include <unordered_map>
+#include <tuple>
+#include <random>
+#include <stdexcept>
+#include <algorithm>
+#include <optional>
 
 /**
- * @brief An object used to store data on a theoretical roulette wheel.
- *        Mainly used for running the weighted random selection algorithm, the "roulette wheel selection algorithm".
+ * @brief A weighted random selection data structure using the roulette wheel algorithm.
+ *
+ * This class implements the roulette wheel selection algorithm, commonly used in
+ * genetic algorithms, game development, and probability-based systems. Elements
+ * are selected randomly with probability proportional to their weights.
+ *
+ * @tparam E Element type to store
+ * @tparam W Weight type (must be numeric: int, float, double, etc.)
  */
 template<typename E, typename W>
-class RouletteWheel
-{
+class RouletteWheel {
 public:
-    /*** Variables ***/
-    std::vector< WheelRegion<E,W> > wheelRegions; //A linear data structure storing all of the regions of the wheel
-
     /*** Constructors ***/
-    //Default
+
+    /**
+     * @brief Default constructor - creates an empty roulette wheel
+     */
     RouletteWheel()
-    {
+        : m_randomEngine(std::random_device{}()) {
     }
 
-
     /**
-     * @brief Converts an unordered map to a roulette wheel object
+     * @brief Constructs a roulette wheel from an unordered map
+     * @param elementWeightMap Map where keys are elements and values are weights
      */
-    RouletteWheel(  const std::unordered_map<E, W> unorderedMap   )
-    {
-        //For each key in the unordered map
-        for(const auto & [key, value] : unorderedMap)
-        {
-            //Add a region to the wheel, storing the key of the map as the element of the region and the value as the weight of the region
-            addWheelRegion(key, value);
+    explicit RouletteWheel(const std::unordered_map<E, W>& elementWeightMap)
+        : m_randomEngine(std::random_device{}()) {
+        for (const auto& [element, weight] : elementWeightMap) {
+            addRegion(element, weight);
         }
     }
 
-
     /**
-     * @brief Converts a vector of tuples into a roulette wheel object
+     * @brief Constructs a roulette wheel from a vector of element-weight tuples
+     * @param elementWeightPairs Vector of (element, weight) tuples
      */
-    RouletteWheel(  std::vector< std::tuple<E,W> > vecOfTuples )
-    {
-        //For each element in the vector of tuples
-        for(const auto & element : vecOfTuples)
-        {
-            //Add a region to the wheel, storing the first element in the tuple as the element of the region and the second as the weight of the region
-            addWheelRegion(std::get<0>(element), std::get<1>(element));
+    explicit RouletteWheel(const std::vector<std::tuple<E, W>>& elementWeightPairs)
+        : m_randomEngine(std::random_device{}()) {
+        for (const auto& [element, weight] : elementWeightPairs) {
+            addRegion(element, weight);
         }
     }
 
+    /*** Selection Methods ***/
 
-
-    /***** METHODS *****/
-    
     /**
-     * @brief Run the roulette wheel selection algorithm. 
+     * @brief Selects an element using weighted random selection
+     * @return The selected element
+     * @throws std::runtime_error if the wheel is empty
      */
-    E select() const
-    {
-        //If we try to select from an empty wheel, just return a static, default object of type E
-        if( wheelRegions.empty() )
-        {
-            static E dummyElement;
-            return dummyElement;
-        }
-        //If we only have one region on the wheel, return the element of the single region
-        else if( wheelRegions.size() == 1 )
-        {
-            return wheelRegions.at(0).getElement();
+    E select() const {
+        if (m_regions.empty()) {
+            throw std::runtime_error("Cannot select from an empty RouletteWheel");
         }
 
-        //Get the sum of the weights for all entries in wheelRegions
-        W sumOfWeights = getSumOfWeights();
+        if (m_regions.size() == 1) {
+            return m_regions[0].getElement();
+        }
 
-		//Now generate a random number between 0 and the sumOfWeights
-		W randomNumber = static_cast <W> (std::rand() / ( static_cast <W> (RAND_MAX/(sumOfWeights))));
+        const W totalWeight = calculateTotalWeight();
+        const W randomValue = generateRandomWeight(totalWeight);
 
-		//Now sum up our weights until our partial sum is greater than the randomly chosen number
-		float partialSum = 0;
-		for(int i = 0; i < wheelRegions.size(); i++)
-		{
-			partialSum += wheelRegions.at(i).getWeight();
-			if( partialSum >= randomNumber )
-			{
-                //The partialSum is greater than the randomNumber. This is where the wheel stops spinning!
-                WheelRegion selectedWheelRegion = wheelRegions.at(i);
-				return selectedWheelRegion.getElement();
-			}	
-		}
-
-		std::cout << "RouletteWheel::select() error, couldn't return an element. Partial sum reached " << partialSum <<
-                     " and the randomNumber generated was " << randomNumber << std::endl;
-		getch();
-		E defaultItemToReturn;
-		return defaultItemToReturn;
+        return selectElementByWeight(randomValue);
     }
 
+    /**
+     * @brief Selects an element and returns it as an optional (safe version)
+     * @return Optional containing the selected element, or nullopt if wheel is empty
+     */
+    std::optional<E> selectSafe() const {
+        if (m_regions.empty()) {
+            return std::nullopt;
+        }
+        return select();
+    }
 
     /**
-     * @brief Selects an element from the Roulette wheel and then changes the weight of the selected element on
-     *        the wheel before returning it. If the weight becomes less than or equal to zero, the wheel
-     *        region is removed.
+     * @brief Selects an element and modifies its weight
+     * @param weightDelta Amount to add to the selected element's weight (can be negative)
+     * @return The selected element
+     * @throws std::runtime_error if the wheel is empty
      */
-    E selectAndChangeWeight( W weightChange = -1 )
-    {
-        // First select an element using the standard selection algorithm
-        E selectedElement = select();
-
-        // Find the index of the selected element
-        int index = getIndexOfElement(selectedElement);
-
-        // If found, change the weight
-        if(index != -1)
-        {
-            wheelRegions.at(index).weight += weightChange;
-
-            // Remove the region if weight is now 0 or less
-            if(wheelRegions.at(index).getWeight() <= 0)
-            {
-                wheelRegions.erase(wheelRegions.begin() + index);
-            }
-        }
-
+    E selectAndModifyWeight(W weightDelta = -1) {
+        const E selectedElement = select();
+        modifyElementWeight(selectedElement, weightDelta);
         return selectedElement;
     }
 
-
     /**
-     * @brief Runs the roulette wheel selection algorithm, returning the selected wheel region element and also removing it from the wheel.
+     * @brief Selects an element and removes it from the wheel
+     * @return The selected element
+     * @throws std::runtime_error if the wheel is empty
      */
-    E selectAndRemove()
-    {
-        // First select an element using the standard selection algorithm
-        E selectedElement = select();
-
-        // Find the index of the selected element
-        int index = getIndexOfElement(selectedElement);
-
-        // If found, remove it from the wheel
-        if(index != -1)
-        {
-            wheelRegions.erase(wheelRegions.begin() + index);
-        }
-
+    E selectAndRemove() {
+        const E selectedElement = select();
+        removeElement(selectedElement);
         return selectedElement;
     }
 
+    /*** Modification Methods ***/
 
     /**
-     * @brief Adds a region to the wheel. If an element already exists, combines the weights.
+     * @brief Adds a new region to the wheel or combines weight if element exists
+     * @param element The element to add
+     * @param weight The weight for this element (must be positive)
+     * @throws std::invalid_argument if weight is negative or zero
      */
-    void addWheelRegion(    const E regionElement,
-                            const W regionWeight    )
-    {
-        // Check if this element already exists in the wheel
-        for (auto& existingRegion : wheelRegions) {
-            if (existingRegion.getElement() == regionElement) {
-                // Element found - combine the weights
-                W combinedWeight = existingRegion.getWeight() + regionWeight;
-                existingRegion.weight = combinedWeight;
-                return;
-            }
+    void addRegion(const E& element, W weight) {
+        if (weight <= 0) {
+            throw std::invalid_argument("Weight must be positive");
         }
-        
-        // Element not found - add as new region
-        WheelRegion wheelRegion = WheelRegion(regionElement, regionWeight);
-        wheelRegions.push_back(wheelRegion);
+
+        const auto existingIndex = findElementIndex(element);
+        if (existingIndex.has_value()) {
+            combineWeightAtIndex(*existingIndex, weight);
+            return;
+        }
+
+        m_regions.emplace_back(element, weight);
     }
 
-
     /**
-	 * @brief Modify wheelRegions, such that all wheelRegions containing a weight equal to zero are removed.
-	 */
-	void removeInvalidRegions()
-	{
-		wheelRegions.erase( std::remove_if(wheelRegions.begin(), wheelRegions.end(),
-                            [](WheelRegion<E,W> wheelRegion) { return wheelRegion.getWeight() <= 0; }), wheelRegions.end());
-	}
-
-
-    /**
-     * @brief Returns true if the roulette wheel has no regions
+     * @brief Removes a specific element from the wheel
+     * @param element The element to remove
+     * @return true if element was found and removed, false otherwise
      */
-    bool empty() const
-    {
-        return wheelRegions.empty();
+    bool removeElement(const E& element) {
+        const auto index = findElementIndex(element);
+        if (!index.has_value()) {
+            return false;
+        }
+
+        m_regions.erase(m_regions.begin() + *index);
+        return true;
     }
 
     /**
-     * @brief Returns the percentage chance (0.0 to 100.0) that a given element will be selected
-     * @param element The element to calculate the selection percentage for
+     * @brief Removes all regions with weight <= 0
+     * @return Number of regions removed
+     */
+    size_t removeInvalidRegions() {
+        const size_t originalSize = m_regions.size();
+        m_regions.erase(
+            std::remove_if(m_regions.begin(), m_regions.end(),
+                [](const WheelRegion<E, W>& region) {
+                    return region.getWeight() <= 0;
+                }),
+            m_regions.end()
+        );
+        return originalSize - m_regions.size();
+    }
+
+    /*** Query Methods ***/
+
+    /**
+     * @brief Checks if the wheel has no regions
+     * @return true if empty, false otherwise
+     */
+    bool empty() const {
+        return m_regions.empty();
+    }
+
+    /**
+     * @brief Gets the number of regions in the wheel
+     * @return Number of regions
+     */
+    size_t size() const {
+        return m_regions.size();
+    }
+
+    /**
+     * @brief Calculates the selection probability for an element as a percentage
+     * @param element The element to query
      * @return Percentage chance (0.0 to 100.0), or 0.0 if element not found
      */
-    float getSelectChance(const E& element) const
-    {
-        if (wheelRegions.empty()) {
-            return 0.0f;
+    double getSelectionProbability(const E& element) const {
+        if (m_regions.empty()) {
+            return 0.0;
         }
 
-        // Find the wheel region containing this element
-        W elementWeight = 0;
-        bool elementFound = false;
-        
-        for (const auto& wheelRegion : wheelRegions) {
-            if (wheelRegion.getElement() == element) {
-                elementWeight = wheelRegion.getWeight();
-                elementFound = true;
-                break;
-            }
+        const auto elementWeight = findElementWeight(element);
+        if (!elementWeight.has_value()) {
+            return 0.0;
         }
-        
-        if (!elementFound) {
-            return 0.0f;
-        }
-        
-        // Calculate total weight
-        W totalWeight = getSumOfWeights();
-        
+
+        const W totalWeight = calculateTotalWeight();
         if (totalWeight <= 0) {
-            return 0.0f;
+            return 0.0;
         }
-        
-        // Return percentage (element weight / total weight * 100)
-        return static_cast<float>(elementWeight) / static_cast<float>(totalWeight) * 100.0f;
+
+        return (static_cast<double>(*elementWeight) / static_cast<double>(totalWeight)) * 100.0;
     }
 
+    /**
+     * @brief Gets a const reference to all wheel regions
+     * @return Const reference to the regions vector
+     */
+    const std::vector<WheelRegion<E, W>>& getRegions() const {
+        return m_regions;
+    }
+
+    /**
+     * @brief Seeds the random number generator
+     * @param seed The seed value
+     */
+    void seedRandom(unsigned int seed) {
+        m_randomEngine.seed(seed);
+    }
 
 private:
+    /*** Member Variables ***/
+    std::vector<WheelRegion<E, W>> m_regions;
+    mutable std::mt19937 m_randomEngine;
 
-
-    /*** Methods (Private) ***/
+    /*** Private Helper Methods ***/
 
     /**
-     * @brief Calculates the sum of all of each wheelRegion's weight and returns it.
+     * @brief Calculates the sum of all region weights
+     * @return Total weight
      */
-    W getSumOfWeights() const
-    {
-        W weightSum = 0;
-		//For each region of the wheel
-		for(int i = 0; i < wheelRegions.size(); i++)
-		{
-			weightSum += wheelRegions.at(i).getWeight();
-		}
-		return weightSum;
+    W calculateTotalWeight() const {
+        W totalWeight = 0;
+        for (const auto& region : m_regions) {
+            totalWeight += region.getWeight();
+        }
+        return totalWeight;
     }
 
+    /**
+     * @brief Generates a random weight value in the range [0, maxWeight)
+     * @param maxWeight Upper bound (exclusive)
+     * @return Random weight value
+     */
+    W generateRandomWeight(W maxWeight) const {
+        if constexpr (std::is_integral_v<W>) {
+            std::uniform_int_distribution<W> distribution(0, maxWeight - 1);
+            return distribution(m_randomEngine);
+        } else {
+            std::uniform_real_distribution<W> distribution(0.0, static_cast<double>(maxWeight));
+            return distribution(m_randomEngine);
+        }
+    }
 
     /**
-     * @brief Finds the index of a wheel region containing the given element.
-     * @param element The element to search for
-     * @return The index of the wheel region, or -1 if not found
+     * @brief Selects an element based on a random weight value
+     * @param randomValue The random value to use for selection
+     * @return The selected element
      */
-    int getIndexOfElement(const E& element) const
-    {
-        for(int i = 0; i < wheelRegions.size(); i++)
-        {
-            if(wheelRegions.at(i).getElement() == element)
-            {
+    E selectElementByWeight(W randomValue) const {
+        W accumulatedWeight = 0;
+        for (const auto& region : m_regions) {
+            accumulatedWeight += region.getWeight();
+            if (accumulatedWeight > randomValue) {
+                return region.getElement();
+            }
+        }
+
+        // Fallback to last element (handles floating-point rounding edge cases)
+        return m_regions.back().getElement();
+    }
+
+    /**
+     * @brief Finds the index of an element in the regions vector
+     * @param element The element to find
+     * @return Optional containing the index, or nullopt if not found
+     */
+    std::optional<size_t> findElementIndex(const E& element) const {
+        for (size_t i = 0; i < m_regions.size(); ++i) {
+            if (m_regions[i].getElement() == element) {
                 return i;
             }
         }
-        return -1;
+        return std::nullopt;
     }
 
-    
-#ifdef USE_CEREAL
-    // Make cereal::access a friend only if cereal is enabled
-    friend class cereal::access;
     /**
-     * @brief The function that allows the cereal library to serialize the RouletteWheel object.
-     *        In order to use this function, the E and W types must also have serialization functions
-     *        defined for them as well.
+     * @brief Finds the weight of an element
+     * @param element The element to find
+     * @return Optional containing the weight, or nullopt if not found
+     */
+    std::optional<W> findElementWeight(const E& element) const {
+        const auto index = findElementIndex(element);
+        if (!index.has_value()) {
+            return std::nullopt;
+        }
+        return m_regions[*index].getWeight();
+    }
+
+    /**
+     * @brief Combines weight to an existing region at the specified index
+     * @param index Index of the region
+     * @param additionalWeight Weight to add
+     */
+    void combineWeightAtIndex(size_t index, W additionalWeight) {
+        const W newWeight = m_regions[index].getWeight() + additionalWeight;
+        m_regions[index].setWeight(newWeight);
+    }
+
+    /**
+     * @brief Modifies the weight of an element and removes it if weight becomes invalid
+     * @param element The element to modify
+     * @param weightDelta Amount to add to the weight
+     */
+    void modifyElementWeight(const E& element, W weightDelta) {
+        const auto index = findElementIndex(element);
+        if (!index.has_value()) {
+            return;
+        }
+
+        const W newWeight = m_regions[*index].getWeight() + weightDelta;
+        if (newWeight <= 0) {
+            m_regions.erase(m_regions.begin() + *index);
+            return;
+        }
+
+        m_regions[*index].setWeight(newWeight);
+    }
+
+#ifdef USE_CEREAL
+    friend class cereal::access;
+
+    /**
+     * @brief Serialization function for the cereal library
      *
-     *        Learn more about the cereal library here: https://github.com/USCiLab/cereal
+     * Allows the RouletteWheel object to be serialized/deserialized.
+     * Requires that both E and W types also have serialization support.
+     * Note: Random engine state is not serialized.
+     *
+     * @see https://github.com/USCiLab/cereal
      */
     template <class Archive>
-    void serialize(Archive & archive)
-    {
-        archive( wheelRegions );
+    void serialize(Archive& archive) {
+        archive(m_regions);
     }
 #endif
 };
+
+#endif // ROULETTE_WHEEL_HPP
