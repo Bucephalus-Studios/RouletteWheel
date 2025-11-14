@@ -1,62 +1,79 @@
+#ifndef WHEEL_REGION_HPP
+#define WHEEL_REGION_HPP
+
+#include <utility>  // For std::move
+
 /**
- * @brief An object stored within a RouletteWheel's wheelRegions vector. Contains the elements
- *        stored in the RouletteWheel as wheel as their associated weight for being selected 
- *        with the roulette wheel selection algorithm.
+ * @brief A region within a RouletteWheel containing an element and its selection weight.
+ *
+ * This class represents a single segment of the roulette wheel, storing an element
+ * and its associated probability weight for the roulette wheel selection algorithm.
+ *
+ * @tparam E Element type to store
+ * @tparam W Weight type (typically numeric: int, float, double)
  */
-template<typename E, typename W> 
-class WheelRegion
-{
+template<typename E, typename W>
+class WheelRegion {
 public:
-    /*** Variables ***/
-    E element; //The element stored at this region of the wheel
-    W weight; //The weight of this wheel region to be selected by the roulette wheel selection algorithm
+    /**
+     * @brief Default constructor - creates a region with default-initialized values
+     */
+    WheelRegion() = default;
 
-    /*** Constructors ***/
-
-    //default
-    WheelRegion()
-    {
+    /**
+     * @brief Constructs a wheel region with the specified element and weight
+     * @param element The element to store in this region
+     * @param weight The probability weight for selecting this element
+     */
+    WheelRegion(E element, W weight)
+        : m_element(std::move(element))
+        , m_weight(weight) {
     }
 
-    //parametric
-    WheelRegion(    const E elementParam,
-                    const W weightParam   )
-    {
-        element = elementParam;
-        weight = weightParam;
+    /**
+     * @brief Gets the element stored in this wheel region
+     * @return Const reference to the element
+     */
+    const E& getElement() const {
+        return m_element;
     }
 
-
-    /***** METHODS *****/
-    E getElement() const
-    {
-        return element;
+    /**
+     * @brief Gets the weight of this wheel region
+     * @return The weight value
+     */
+    W getWeight() const {
+        return m_weight;
     }
 
-
-    W getWeight() const
-    {
-        return weight;
+    /**
+     * @brief Sets the weight of this wheel region
+     * @param weight The new weight value
+     */
+    void setWeight(W weight) {
+        m_weight = weight;
     }
-    
-
 
 private:
+    E m_element{}; ///< The element stored in this wheel region
+    W m_weight{};  ///< The selection weight for this region
 
 #ifdef USE_CEREAL
-    // Make cereal::access a friend only if cereal is enabled
     friend class cereal::access;
+
     /**
-     * @brief The function that allows the cereal library to serialize the WheelRegion object.
-     *        In order to use this function, the E and W types must also have serialization functions
-     *        defined for them as well.
+     * @brief Serialization function for the cereal library
      *
-     *        Learn more about the cereal library here: https://github.com/USCiLab/cereal
+     * Allows the WheelRegion object to be serialized/deserialized.
+     * Requires that both E and W types also have serialization support.
+     *
+     * @see https://github.com/USCiLab/cereal
      */
     template <class Archive>
-    void serialize(Archive & archive)
-    {
-        archive( element, weight );
+    void serialize(Archive& archive) {
+        archive(m_element, m_weight);
     }
 #endif
 };
+
+#endif // WHEEL_REGION_HPP
