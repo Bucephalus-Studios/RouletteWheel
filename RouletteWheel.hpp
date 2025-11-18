@@ -348,4 +348,5 @@ private:
 #endif
 };
 
+
 #endif // ROULETTE_WHEEL_HPP
