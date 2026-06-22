@@ -1,7 +1,7 @@
-#ifndef ROULETTE_WHEEL_HPP
-#define ROULETTE_WHEEL_HPP
+#pragma once
 
 #include "classes/WheelRegion.hpp"
+#include <stevensMathLib.h>
 #include <vector>
 #include <unordered_map>
 #include <tuple>
@@ -9,48 +9,92 @@
 #include <stdexcept>
 #include <algorithm>
 #include <optional>
+#include <sstream>
 
 /**
  * @brief A weighted random selection data structure using the roulette wheel algorithm.
  *
- * This class implements the roulette wheel selection algorithm, commonly used in
- * genetic algorithms, game development, and probability-based systems. Elements
- * are selected randomly with probability proportional to their weights.
+ * Elements are selected randomly with probability proportional to their weights.
  *
  * @tparam E Element type to store
  * @tparam W Weight type (must be numeric: int, float, double, etc.)
+ *
  */
 template<typename E, typename W>
 class RouletteWheel {
 public:
+    /**
+     * @brief Construction options for RouletteWheel
+     */
+    struct Options {
+        /**
+         * @brief When true, entries with weight <= 0 are silently skipped instead of throwing.
+         * Use this when weight data may contain zeroed-out entries (e.g. after adjustments
+         * that clamped negatives to zero). Check empty() afterward to handle the all-zero case.
+         */
+        bool ignoreInvalidWeights = true;
+    };
+
     /*** Constructors ***/
 
     /**
      * @brief Default constructor - creates an empty roulette wheel
      */
-    RouletteWheel()
-        : m_randomEngine(std::random_device{}()) {
-    }
+    RouletteWheel() = default;
 
     /**
      * @brief Constructs a roulette wheel from an unordered map
      * @param elementWeightMap Map where keys are elements and values are weights
+     * @param options Construction options (e.g. whether to skip non-positive weights)
      */
-    explicit RouletteWheel(const std::unordered_map<E, W>& elementWeightMap)
-        : m_randomEngine(std::random_device{}()) {
-        for (const auto& [element, weight] : elementWeightMap) {
-            addRegion(element, weight);
+    explicit RouletteWheel(const std::unordered_map<E, W>& elementWeightMap, Options options = {})
+    {
+        regions.reserve(elementWeightMap.size());
+        if( options.ignoreInvalidWeights )
+        {
+            for (const auto& [element, weight] : elementWeightMap)
+            {
+                if (weight <= W{0})
+                {
+                    continue;
+                }
+                addRegion(element, weight);
+            }
+        }
+        else
+        {
+            for (const auto& [element, weight] : elementWeightMap)
+            {
+                addRegion(element, weight);
+            }
         }
     }
 
     /**
      * @brief Constructs a roulette wheel from a vector of element-weight tuples
      * @param elementWeightPairs Vector of (element, weight) tuples
+     * @param options Construction options (e.g. whether to skip non-positive weights)
      */
-    explicit RouletteWheel(const std::vector<std::tuple<E, W>>& elementWeightPairs)
-        : m_randomEngine(std::random_device{}()) {
-        for (const auto& [element, weight] : elementWeightPairs) {
-            addRegion(element, weight);
+    explicit RouletteWheel(const std::vector<std::tuple<E, W>>& elementWeightPairs, Options options = {})
+    {
+        regions.reserve(elementWeightPairs.size());
+        if( options.ignoreInvalidWeights )
+        {
+            for (const auto& [element, weight] : elementWeightPairs)
+            {
+                if (weight <= W{0})
+                {
+                    continue;
+                }
+                addRegion(element, weight);
+            }
+        }
+        else
+        {
+            for (const auto& [element, weight] : elementWeightPairs)
+            {
+                addRegion(element, weight);
+            }
         }
     }
 
@@ -62,12 +106,15 @@ public:
      * @throws std::runtime_error if the wheel is empty
      */
     E select() const {
-        if (m_regions.empty()) {
-            throw std::runtime_error("Cannot select from an empty RouletteWheel");
+        if (regions.empty()) {
+            throw std::runtime_error(
+                "RouletteWheel::select: wheel is empty — either it was constructed with no entries, "
+                "all entries had weight <= 0 (use Options{.ignoreInvalidWeights=true} to skip them), "
+                "or all elements were removed");
         }
 
-        if (m_regions.size() == 1) {
-            return m_regions[0].getElement();
+        if (regions.size() == 1) {
+            return regions[0].getElement();
         }
 
         const W totalWeight = calculateTotalWeight();
@@ -81,7 +128,7 @@ public:
      * @return Optional containing the selected element, or nullopt if wheel is empty
      */
     std::optional<E> selectSafe() const {
-        if (m_regions.empty()) {
+        if (regions.empty()) {
             return std::nullopt;
         }
         return select();
@@ -120,8 +167,13 @@ public:
      */
     void addRegion(const E& element, W weight) {
         if (weight <= 0) {
-            throw std::invalid_argument("Weight must be positive");
+            std::ostringstream msg;
+            msg << "RouletteWheel::addRegion: weight must be positive, got " << weight
+                << " (use Options{.ignoreInvalidWeights=true} in the constructor to skip such entries)";
+            throw std::invalid_argument(msg.str());
         }
+
+        totalWeightDirty = true;
 
         const auto existingIndex = findElementIndex(element);
         if (existingIndex.has_value()) {
@@ -129,7 +181,7 @@ public:
             return;
         }
 
-        m_regions.emplace_back(element, weight);
+        regions.emplace_back(element, weight);
     }
 
     /**
@@ -143,7 +195,8 @@ public:
             return false;
         }
 
-        m_regions.erase(m_regions.begin() + *index);
+        totalWeightDirty = true;
+        regions.erase(regions.begin() + *index);
         return true;
     }
 
@@ -152,15 +205,16 @@ public:
      * @return Number of regions removed
      */
     size_t removeInvalidRegions() {
-        const size_t originalSize = m_regions.size();
-        m_regions.erase(
-            std::remove_if(m_regions.begin(), m_regions.end(),
+        const size_t originalSize = regions.size();
+        totalWeightDirty = true;
+        regions.erase(
+            std::remove_if(regions.begin(), regions.end(),
                 [](const WheelRegion<E, W>& region) {
                     return region.getWeight() <= 0;
                 }),
-            m_regions.end()
+            regions.end()
         );
-        return originalSize - m_regions.size();
+        return originalSize - regions.size();
     }
 
     /*** Query Methods ***/
@@ -170,7 +224,7 @@ public:
      * @return true if empty, false otherwise
      */
     bool empty() const {
-        return m_regions.empty();
+        return regions.empty();
     }
 
     /**
@@ -178,16 +232,16 @@ public:
      * @return Number of regions
      */
     size_t size() const {
-        return m_regions.size();
+        return regions.size();
     }
 
     /**
-     * @brief Calculates the selection probability for an element as a percentage
+     * @brief Calculates the selection probability for an element as a fraction
      * @param element The element to query
-     * @return Percentage chance (0.0 to 100.0), or 0.0 if element not found
+     * @return Probability fraction (0.0 to 1.0), or 0.0 if element not found
      */
     double getSelectionProbability(const E& element) const {
-        if (m_regions.empty()) {
+        if (regions.empty()) {
             return 0.0;
         }
 
@@ -201,7 +255,7 @@ public:
             return 0.0;
         }
 
-        return (static_cast<double>(*elementWeight) / static_cast<double>(totalWeight)) * 100.0;
+        return static_cast<double>(*elementWeight) / static_cast<double>(totalWeight);
     }
 
     /**
@@ -209,21 +263,34 @@ public:
      * @return Const reference to the regions vector
      */
     const std::vector<WheelRegion<E, W>>& getRegions() const {
-        return m_regions;
+        return regions;
     }
 
     /**
-     * @brief Seeds the random number generator
+     * @brief Seeds the shared random number generator for the current thread.
      * @param seed The seed value
+     * @note The engine is shared by all RouletteWheels on the calling thread, so this
+     *       affects subsequent selections on every wheel used by this thread.
      */
     void seedRandom(unsigned int seed) {
-        m_randomEngine.seed(seed);
+        stevensMathLib::setSeed(seed);
     }
 
 private:
     /*** Member Variables ***/
-    std::vector<WheelRegion<E, W>> m_regions;
-    mutable std::mt19937 m_randomEngine;
+    std::vector<WheelRegion<E, W>> regions;
+    mutable W totalWeight = W{0};
+    mutable bool totalWeightDirty = true;
+
+    /**
+     * @brief The random engine is only used at selection time and carries no per-wheel state,
+     *        so a single engine is shared across all wheels rather than stored (and seeded)
+     *        per instance. It is thread_local because std::mt19937 is not thread-safe and
+     *        wheels may be used from worker threads (e.g. month resolution).
+     */
+    static std::mt19937& sharedEngine() {
+        return stevensMathLib::getRandomEngine();
+    }
 
     /*** Private Helper Methods ***/
 
@@ -232,9 +299,12 @@ private:
      * @return Total weight
      */
     W calculateTotalWeight() const {
-        W totalWeight = 0;
-        for (const auto& region : m_regions) {
-            totalWeight += region.getWeight();
+        if (totalWeightDirty) {
+            totalWeight = W{0};
+            for (const auto& region : regions) {
+                totalWeight += region.getWeight();
+            }
+            totalWeightDirty = false;
         }
         return totalWeight;
     }
@@ -247,10 +317,10 @@ private:
     W generateRandomWeight(W maxWeight) const {
         if constexpr (std::is_integral_v<W>) {
             std::uniform_int_distribution<W> distribution(0, maxWeight - 1);
-            return distribution(m_randomEngine);
+            return distribution(sharedEngine());
         } else {
             std::uniform_real_distribution<W> distribution(0.0, static_cast<double>(maxWeight));
-            return distribution(m_randomEngine);
+            return distribution(sharedEngine());
         }
     }
 
@@ -261,7 +331,7 @@ private:
      */
     E selectElementByWeight(W randomValue) const {
         W accumulatedWeight = 0;
-        for (const auto& region : m_regions) {
+        for (const auto& region : regions) {
             accumulatedWeight += region.getWeight();
             if (accumulatedWeight > randomValue) {
                 return region.getElement();
@@ -269,7 +339,7 @@ private:
         }
 
         // Fallback to last element (handles floating-point rounding edge cases)
-        return m_regions.back().getElement();
+        return regions.back().getElement();
     }
 
     /**
@@ -278,8 +348,8 @@ private:
      * @return Optional containing the index, or nullopt if not found
      */
     std::optional<size_t> findElementIndex(const E& element) const {
-        for (size_t i = 0; i < m_regions.size(); ++i) {
-            if (m_regions[i].getElement() == element) {
+        for (size_t i = 0; i < regions.size(); ++i) {
+            if (regions[i].getElement() == element) {
                 return i;
             }
         }
@@ -296,7 +366,7 @@ private:
         if (!index.has_value()) {
             return std::nullopt;
         }
-        return m_regions[*index].getWeight();
+        return regions[*index].getWeight();
     }
 
     /**
@@ -305,8 +375,8 @@ private:
      * @param additionalWeight Weight to add
      */
     void combineWeightAtIndex(size_t index, W additionalWeight) {
-        const W newWeight = m_regions[index].getWeight() + additionalWeight;
-        m_regions[index].setWeight(newWeight);
+        const W newWeight = regions[index].getWeight() + additionalWeight;
+        regions[index].setWeight(newWeight);
     }
 
     /**
@@ -320,13 +390,15 @@ private:
             return;
         }
 
-        const W newWeight = m_regions[*index].getWeight() + weightDelta;
+        totalWeightDirty = true;
+
+        const W newWeight = regions[*index].getWeight() + weightDelta;
         if (newWeight <= 0) {
-            m_regions.erase(m_regions.begin() + *index);
+            regions.erase(regions.begin() + *index);
             return;
         }
 
-        m_regions[*index].setWeight(newWeight);
+        regions[*index].setWeight(newWeight);
     }
 
 #ifdef USE_CEREAL
@@ -343,10 +415,9 @@ private:
      */
     template <class Archive>
     void serialize(Archive& archive) {
-        archive(m_regions);
+        archive(regions);
     }
 #endif
 };
 
 
-#endif // ROULETTE_WHEEL_HPP

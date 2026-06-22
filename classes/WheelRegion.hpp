@@ -1,7 +1,9 @@
-#ifndef WHEEL_REGION_HPP
-#define WHEEL_REGION_HPP
+#pragma once
 
-#include <utility>  // For std::move
+#include <utility>
+#ifdef USE_CEREAL
+    #include <cereal/access.hpp>
+#endif
 
 /**
  * @brief A region within a RouletteWheel containing an element and its selection weight.
@@ -26,8 +28,8 @@ public:
      * @param weight The probability weight for selecting this element
      */
     WheelRegion(E element, W weight)
-        : m_element(std::move(element))
-        , m_weight(weight) {
+        : element(std::move(element))
+        , weight(weight) {
     }
 
     /**
@@ -35,7 +37,7 @@ public:
      * @return Const reference to the element
      */
     const E& getElement() const {
-        return m_element;
+        return element;
     }
 
     /**
@@ -43,20 +45,20 @@ public:
      * @return The weight value
      */
     W getWeight() const {
-        return m_weight;
+        return weight;
     }
 
     /**
      * @brief Sets the weight of this wheel region
      * @param weight The new weight value
      */
-    void setWeight(W weight) {
-        m_weight = weight;
+    void setWeight(W newWeight) {
+        weight = newWeight;
     }
 
 private:
-    E m_element{}; ///< The element stored in this wheel region
-    W m_weight{};  ///< The selection weight for this region
+    E element{}; ///< The element stored in this wheel region
+    W weight{};  ///< The selection weight for this region
 
 #ifdef USE_CEREAL
     friend class cereal::access;
@@ -71,9 +73,8 @@ private:
      */
     template <class Archive>
     void serialize(Archive& archive) {
-        archive(m_element, m_weight);
+        archive(element, weight);
     }
 #endif
 };
 
-#endif // WHEEL_REGION_HPP
